@@ -4,6 +4,11 @@ Prepared 2026-10-15 from [PROJECT_BRIEF.md](PROJECT_BRIEF.md) and the repository
 
 This is a build plan, not an implementation. The deliverable is a deterministic, single-symbol, single-threaded C++20 matching engine, an independent reference engine, evidence of correctness, and reproducible performance results. “End to end” means command input through matching, events, replay, tests, benchmarks, CI, and documentation. There is no frontend or network service in this project.
 
+**Implementation update (2026-10-15):** Steps 01–05 are implemented and locally
+verified. See [docs/PROGRESS.md](docs/PROGRESS.md) for results, tool setup, and the
+Step 06 resume point. The starting-point description below records the original
+planning snapshot.
+
 ## 1. Starting point and recommended order
 
 The repository currently contains `README.md` with only the project name, `LICENSE`, and the untracked `PROJECT_BRIEF.md`. There is no application, dependency configuration, test suite, or CI to extend. Preserve the brief and license.

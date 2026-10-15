@@ -91,8 +91,8 @@ book, including FIFO order. First failing check wins:
 | Cancel | `InvalidId` -> `UnknownOrder` |
 
 `InvalidPrice` covers nonpositive, outside-range, and off-tick values. Absence
-of a market limit skips price validation. Malformed text belongs to a future
-parser and never becomes a command.
+of a market limit skips price validation. Malformed text is rejected by the
+trace parser before replay begins and never becomes a command.
 
 ## API and diagnostics
 

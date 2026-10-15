@@ -1,4 +1,5 @@
 #include "reference_book.hpp"
+#include "ledger.hpp"
 
 #include <gtest/gtest.h>
 
@@ -10,7 +11,7 @@ using namespace fifofill;
 
 namespace {
 
-void expect_events(ReferenceBook& book, const Command& command,
+void expect_events(auto& book, const Command& command,
                    std::initializer_list<Event> expected) {
     const auto before = book.snapshot();
     const auto events = book.process(command);
@@ -21,19 +22,36 @@ void expect_events(ReferenceBook& book, const Command& command,
     }
 }
 
-void rest(ReferenceBook& book, OrderId id, Side side, Price price, Qty quantity) {
+void rest(auto& book, OrderId id, Side side, Price price, Qty quantity) {
     expect_events(book, Add{id, side, price, quantity},
                   {Accepted{Operation::Add, id, side, price, quantity, false}});
 }
 
-void expect_book(const ReferenceBook& book, std::initializer_list<RestingOrder> bids,
+void expect_book(const auto& book, std::initializer_list<RestingOrder> bids,
                  std::initializer_list<RestingOrder> asks) {
     EXPECT_EQ(book.snapshot(), (Snapshot{bids, asks}));
 }
 
-class ReferenceTest : public testing::Test {
+template<class Engine>
+class CheckedBook {
+public:
+    explicit CheckedBook(BookConfig config) : engine_(config) {}
+    std::span<const Event> process(const Command& command) {
+        const auto events = engine_.process(command);
+        ledger_.observe(command, events, engine_.snapshot());
+        return events;
+    }
+    Snapshot snapshot() const { return engine_.snapshot(); }
+    void check_invariants() const { engine_.check_invariants(); }
+private:
+    Engine engine_;
+    Ledger ledger_;
+};
+
+template<class Book>
+class BookTest : public testing::Test {
 protected:
-    ReferenceBook book{{1, 1000, 1, 8}};
+    Book book{{1, 1000, 1, 8}};
 
     void brief_setup() {
         rest(book, 1, Side::Sell, 100, 100);
@@ -43,8 +61,12 @@ protected:
     }
 };
 
-TEST_F(ReferenceTest, BriefSweepUsesMakerPriceAndLeavesPartialMaker) {
-    brief_setup();
+using Books = testing::Types<CheckedBook<ReferenceBook>>;
+TYPED_TEST_SUITE(BookTest, Books);
+
+TYPED_TEST(BookTest, BriefSweepUsesMakerPriceAndLeavesPartialMaker) {
+    auto& book = this->book;
+    this->brief_setup();
     expect_events(book, Add{5, Side::Buy, 101, 220}, {
         Accepted{Operation::Add, 5, Side::Buy, 101, 220, false},
         Trade{5, 1, 100, 100}, Trade{5, 2, 100, 50}, Trade{5, 3, 101, 70}});
@@ -53,8 +75,9 @@ TEST_F(ReferenceTest, BriefSweepUsesMakerPriceAndLeavesPartialMaker) {
     rest(book, 1, Side::Buy, 98, 1);
 }
 
-TEST_F(ReferenceTest, BriefLimitRemainderRestsAtSubmittedPrice) {
-    brief_setup();
+TYPED_TEST(BookTest, BriefLimitRemainderRestsAtSubmittedPrice) {
+    auto& book = this->book;
+    this->brief_setup();
     expect_events(book, Add{5, Side::Buy, 100, 400}, {
         Accepted{Operation::Add, 5, Side::Buy, 100, 400, false},
         Trade{5, 1, 100, 100}, Trade{5, 2, 100, 50}});
@@ -62,7 +85,8 @@ TEST_F(ReferenceTest, BriefLimitRemainderRestsAtSubmittedPrice) {
                 {{3, Side::Sell, 101, 200}});
 }
 
-TEST_F(ReferenceTest, SellSweepUsesHighestBidAndFifo) {
+TYPED_TEST(BookTest, SellSweepUsesHighestBidAndFifo) {
+    auto& book = this->book;
     rest(book, 1, Side::Buy, 101, 100);
     rest(book, 2, Side::Buy, 101, 50);
     rest(book, 3, Side::Buy, 100, 200);
@@ -73,7 +97,8 @@ TEST_F(ReferenceTest, SellSweepUsesHighestBidAndFifo) {
     expect_book(book, {{3, Side::Buy, 100, 130}}, {{4, Side::Sell, 102, 300}});
 }
 
-TEST_F(ReferenceTest, SellLimitStopsAndRestsAtTail) {
+TYPED_TEST(BookTest, SellLimitStopsAndRestsAtTail) {
+    auto& book = this->book;
     rest(book, 1, Side::Buy, 99, 10);
     rest(book, 2, Side::Buy, 100, 10);
     expect_events(book, Add{3, Side::Sell, 100, 15}, {
@@ -83,9 +108,9 @@ TEST_F(ReferenceTest, SellLimitStopsAndRestsAtTail) {
                 {{3, Side::Sell, 100, 5}, {4, Side::Sell, 100, 5}});
 }
 
-TEST(ReferenceMatching, PartialMakersKeepPriorityOnBothSides) {
+TYPED_TEST(BookTest, Matching_PartialMakersKeepPriorityOnBothSides) {
     for (const auto side : {Side::Buy, Side::Sell}) {
-        ReferenceBook book{{1, 1000, 1, 8}};
+        TypeParam book{{1, 1000, 1, 8}};
         const auto aggressor = side == Side::Buy ? Side::Sell : Side::Buy;
         rest(book, 1, side, 100, 10);
         rest(book, 2, side, 100, 10);
@@ -104,9 +129,9 @@ TEST(ReferenceMatching, PartialMakersKeepPriorityOnBothSides) {
     }
 }
 
-TEST(ReferenceMatching, EmptyMarketsAcceptAndCancelOnBothSides) {
+TYPED_TEST(BookTest, Matching_EmptyMarketsAcceptAndCancelOnBothSides) {
     for (const auto side : {Side::Buy, Side::Sell}) {
-        ReferenceBook book{{1, 1000, 1, 8}};
+        TypeParam book{{1, 1000, 1, 8}};
         expect_events(book, Add{1, side, std::nullopt, 10}, {
             Accepted{Operation::Add, 1, side, std::nullopt, 10, false},
             Canceled{1, 10, CancelReason::MarketRemainder}});
@@ -115,9 +140,9 @@ TEST(ReferenceMatching, EmptyMarketsAcceptAndCancelOnBothSides) {
     }
 }
 
-TEST(ReferenceMatching, MarketsSweepBestFirstAndCancelOnlyRemainder) {
+TYPED_TEST(BookTest, Matching_MarketsSweepBestFirstAndCancelOnlyRemainder) {
     for (const auto side : {Side::Buy, Side::Sell}) {
-        ReferenceBook book{{1, 1000, 1, 8}};
+        TypeParam book{{1, 1000, 1, 8}};
         const auto maker_side = side == Side::Buy ? Side::Sell : Side::Buy;
         const Price best = side == Side::Buy ? 99 : 101;
         rest(book, 1, maker_side, best, 10);
@@ -136,7 +161,8 @@ TEST(ReferenceMatching, MarketsSweepBestFirstAndCancelOnlyRemainder) {
     }
 }
 
-TEST_F(ReferenceTest, AddRejectionPrecedenceAndAtomicity) {
+TYPED_TEST(BookTest, AddRejectionPrecedenceAndAtomicity) {
+    auto& book = this->book;
     rest(book, 1, Side::Buy, 100, 10);
     const auto invalid = static_cast<Side>(255);
     expect_events(book, Add{0, invalid, 0, 0}, {Rejected{Operation::Add, 0, RejectReason::InvalidId}});
@@ -153,8 +179,8 @@ TEST_F(ReferenceTest, AddRejectionPrecedenceAndAtomicity) {
                   {Rejected{Operation::Add, 1, RejectReason::DuplicateId}});
 }
 
-TEST(ReferenceValidation, TickAndRangeBoundariesApplyToAddAndModify) {
-    ReferenceBook book{{5, 20, 5, 8}};
+TYPED_TEST(BookTest, Validation_TickAndRangeBoundariesApplyToAddAndModify) {
+    TypeParam book{{5, 20, 5, 8}};
     rest(book, 1, Side::Buy, 5, 1);
     rest(book, 2, Side::Sell, 20, 1);
     for (const Price price : {Price{4}, Price{6}, Price{19}, Price{21}}) {
@@ -166,11 +192,11 @@ TEST(ReferenceValidation, TickAndRangeBoundariesApplyToAddAndModify) {
     expect_book(book, {{1, Side::Buy, 5, 1}}, {{2, Side::Sell, 20, 1}});
 }
 
-TEST(ReferenceValidation, MaximumIdsQuantitiesAndPricesAreValid) {
+TYPED_TEST(BookTest, Validation_MaximumIdsQuantitiesAndPricesAreValid) {
     const auto id = std::numeric_limits<OrderId>::max();
     const auto quantity = std::numeric_limits<Qty>::max();
     const auto price = std::numeric_limits<Price>::max();
-    ReferenceBook book{{price, price, price, 8}};
+    TypeParam book{{price, price, price, 8}};
     rest(book, id, Side::Sell, price, quantity);
     rest(book, id - 1, Side::Sell, price, quantity);
     expect_events(book, Add{1, Side::Buy, price, quantity}, {
@@ -179,9 +205,9 @@ TEST(ReferenceValidation, MaximumIdsQuantitiesAndPricesAreValid) {
     rest(book, id, Side::Sell, price, 1);
 }
 
-TEST(ReferenceCancel, HeadMiddleTailAndSoleOrderOnBothSides) {
+TYPED_TEST(BookTest, Cancel_HeadMiddleTailAndSoleOrderOnBothSides) {
     for (const auto side : {Side::Buy, Side::Sell}) {
-        ReferenceBook book{{1, 1000, 1, 8}};
+        TypeParam book{{1, 1000, 1, 8}};
         for (OrderId id = 1; id <= 4; ++id) {
             rest(book, id, side, 100, static_cast<Qty>(id));
         }
@@ -199,7 +225,8 @@ TEST(ReferenceCancel, HeadMiddleTailAndSoleOrderOnBothSides) {
     }
 }
 
-TEST_F(ReferenceTest, CancelRejectsZeroUnknownFilledAndCanceledIds) {
+TYPED_TEST(BookTest, CancelRejectsZeroUnknownFilledAndCanceledIds) {
+    auto& book = this->book;
     expect_events(book, Cancel{0}, {Rejected{Operation::Cancel, 0, RejectReason::InvalidId}});
     expect_events(book, Cancel{99}, {Rejected{Operation::Cancel, 99, RejectReason::UnknownOrder}});
     rest(book, 1, Side::Sell, 100, 2);
@@ -214,10 +241,10 @@ TEST_F(ReferenceTest, CancelRejectsZeroUnknownFilledAndCanceledIds) {
     rest(book, 1, Side::Buy, 99, 4);
 }
 
-TEST(ReferenceModify, SamePriceShrinkNoopAndIncreaseHaveObservablePriority) {
+TYPED_TEST(BookTest, Modify_SamePriceShrinkNoopAndIncreaseHaveObservablePriority) {
     for (const auto side : {Side::Buy, Side::Sell}) {
         for (const Qty quantity : {Qty{5}, Qty{10}, Qty{15}}) {
-            ReferenceBook book{{1, 1000, 1, 8}};
+            TypeParam book{{1, 1000, 1, 8}};
             rest(book, 1, side, 100, 10);
             rest(book, 2, side, 100, 10);
             const bool retained = quantity <= 10;
@@ -240,11 +267,11 @@ TEST(ReferenceModify, SamePriceShrinkNoopAndIncreaseHaveObservablePriority) {
     }
 }
 
-TEST(ReferenceModify, EveryRepriceLosesPriorityRegardlessOfSize) {
+TYPED_TEST(BookTest, Modify_EveryRepriceLosesPriorityRegardlessOfSize) {
     for (const auto side : {Side::Buy, Side::Sell}) {
         for (const Price price : {Price{99}, Price{101}}) {
             for (const Qty quantity : {Qty{5}, Qty{10}, Qty{15}}) {
-                ReferenceBook book{{1, 1000, 1, 8}};
+                TypeParam book{{1, 1000, 1, 8}};
                 rest(book, 1, side, 100, 10);
                 rest(book, 2, side, price, 10);
                 expect_events(book, Modify{1, price, quantity}, {
@@ -258,7 +285,8 @@ TEST(ReferenceModify, EveryRepriceLosesPriorityRegardlessOfSize) {
     }
 }
 
-TEST_F(ReferenceTest, ModifyComparesRemainingRatherThanOriginalSize) {
+TYPED_TEST(BookTest, ModifyComparesRemainingRatherThanOriginalSize) {
+    auto& book = this->book;
     rest(book, 1, Side::Buy, 100, 100);
     rest(book, 2, Side::Buy, 100, 100);
     expect_events(book, Add{3, Side::Sell, 100, 40}, {
@@ -267,10 +295,10 @@ TEST_F(ReferenceTest, ModifyComparesRemainingRatherThanOriginalSize) {
     expect_book(book, {{2, Side::Buy, 100, 100}, {1, Side::Buy, 100, 80}}, {});
 }
 
-TEST(ReferenceModify, CrossingReplacementsMatchImmediatelyOnBothSides) {
+TYPED_TEST(BookTest, Modify_CrossingReplacementsMatchImmediatelyOnBothSides) {
     for (const auto side : {Side::Buy, Side::Sell}) {
         for (const Qty quantity : {Qty{5}, Qty{10}}) {
-            ReferenceBook book{{1, 1000, 1, 2}};
+            TypeParam book{{1, 1000, 1, 2}};
             const auto other = side == Side::Buy ? Side::Sell : Side::Buy;
             const Price old = side == Side::Buy ? 99 : 103;
             const Price maker = 101;
@@ -294,7 +322,8 @@ TEST(ReferenceModify, CrossingReplacementsMatchImmediatelyOnBothSides) {
     }
 }
 
-TEST_F(ReferenceTest, InvalidModifiesPreserveQuantityPriceAndQueuePosition) {
+TYPED_TEST(BookTest, InvalidModifiesPreserveQuantityPriceAndQueuePosition) {
+    auto& book = this->book;
     rest(book, 1, Side::Buy, 100, 10);
     rest(book, 2, Side::Buy, 100, 20);
     rest(book, 3, Side::Sell, 101, 30);
@@ -308,8 +337,8 @@ TEST_F(ReferenceTest, InvalidModifiesPreserveQuantityPriceAndQueuePosition) {
     expect_events(book, Modify{3, 0, 0}, {Rejected{Operation::Modify, 3, RejectReason::UnknownOrder}});
 }
 
-TEST(ReferenceCapacity, LimitsRejectBeforeMatchingMarketsExecuteAndCancelFreesSlot) {
-    ReferenceBook book{{1, 1000, 1, 2}};
+TYPED_TEST(BookTest, Capacity_LimitsRejectBeforeMatchingMarketsExecuteAndCancelFreesSlot) {
+    TypeParam book{{1, 1000, 1, 2}};
     rest(book, 1, Side::Buy, 99, 10);
     rest(book, 2, Side::Sell, 101, 10);
     expect_events(book, Add{3, Side::Buy, 102, 10},
@@ -325,8 +354,8 @@ TEST(ReferenceCapacity, LimitsRejectBeforeMatchingMarketsExecuteAndCancelFreesSl
     expect_book(book, {{3, Side::Buy, 99, 2}}, {{2, Side::Sell, 101, 5}});
 }
 
-TEST(ReferenceCapacity, EventBufferHandlesCapacityPlusTwoEvents) {
-    ReferenceBook book{{1, 1000, 1, 3}};
+TYPED_TEST(BookTest, Capacity_EventBufferHandlesCapacityPlusTwoEvents) {
+    TypeParam book{{1, 1000, 1, 3}};
     rest(book, 1, Side::Sell, 100, 1);
     rest(book, 2, Side::Sell, 100, 1);
     rest(book, 3, Side::Sell, 101, 1);
@@ -337,7 +366,8 @@ TEST(ReferenceCapacity, EventBufferHandlesCapacityPlusTwoEvents) {
     expect_book(book, {}, {});
 }
 
-TEST_F(ReferenceTest, SnapshotsOwnValuesAcrossLaterProcessing) {
+TYPED_TEST(BookTest, SnapshotsOwnValuesAcrossLaterProcessing) {
+    auto& book = this->book;
     rest(book, 1, Side::Buy, 100, 10);
     const auto saved = book.snapshot();
     const auto events = book.process(Modify{1, 100, 5});

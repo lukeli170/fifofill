@@ -1,0 +1,8 @@
+# Full fanout and unfilled market cancellation at capacity.
+FIFOFILL 1
+CONFIG 1 1000 1 3
+META 0 0 4
+ADD 1 S 100 1
+ADD 2 S 100 1
+ADD 3 S 101 1
+ADD 4 B M 4

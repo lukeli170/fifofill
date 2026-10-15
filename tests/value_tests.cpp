@@ -50,6 +50,7 @@ TEST(Config, CapacityAndEventSizingCannotWrap) {
     if constexpr (sizeof(std::size_t) >= sizeof(std::uint64_t)) {
         const auto limit = std::numeric_limits<std::uint64_t>::max() /
                            std::numeric_limits<Qty>::max();
+        EXPECT_NO_THROW((BookConfig{1, 100, 1, static_cast<std::size_t>(limit)}.level_count()));
         const BookConfig aggregate_overflow{1, 100, 1, static_cast<std::size_t>(limit + 1)};
         EXPECT_THROW(aggregate_overflow.level_count(), std::length_error);
     }

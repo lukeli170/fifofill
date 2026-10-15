@@ -1,0 +1,11 @@
+# Increase loses priority; shrink retains it; filled IDs can be reused.
+FIFOFILL 1
+CONFIG 1 1000 1 8
+META 0 0 7
+ADD 1 B 100 10
+ADD 2 B 100 10
+MODIFY 1 100 15
+MODIFY 2 100 5
+ADD 3 S 100 6
+CANCEL 1
+ADD 1 B 99 2

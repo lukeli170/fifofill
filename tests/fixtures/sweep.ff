@@ -1,0 +1,9 @@
+# Maker-price/FIFO sweep from the contract. Prices are integer base units.
+FIFOFILL 1
+CONFIG 1 1000 1 10
+META 0 0 5
+ADD 1 S 100 100
+ADD 2 S 100 50
+ADD 3 S 101 200
+ADD 4 B 99 300
+ADD 5 B 101 220

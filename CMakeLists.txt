@@ -20,6 +20,16 @@ target_compile_features(fifofill PUBLIC cxx_std_20)
 target_compile_options(fifofill PRIVATE
   $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
 
+add_library(fifofill_tools tools/trace.cpp tools/workload.cpp)
+target_include_directories(fifofill_tools PUBLIC tools)
+target_link_libraries(fifofill_tools PUBLIC fifofill)
+target_compile_options(fifofill_tools PRIVATE
+  $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
+add_executable(fifofill_replay tools/replay.cpp)
+target_link_libraries(fifofill_replay PRIVATE fifofill_tools)
+target_compile_options(fifofill_replay PRIVATE
+  $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
+
 include(CTest)
 if(BUILD_TESTING)
   include(FetchContent)
@@ -32,10 +42,20 @@ if(BUILD_TESTING)
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
   FetchContent_MakeAvailable(googletest)
 
-  add_executable(fifofill_tests tests/build_tests.cpp tests/value_tests.cpp tests/reference_tests.cpp)
-  target_link_libraries(fifofill_tests PRIVATE fifofill GTest::gtest_main)
+  add_executable(fifofill_tests tests/build_tests.cpp tests/value_tests.cpp tests/book_tests.cpp
+    tests/ledger_tests.cpp tests/trace_tests.cpp)
+  target_compile_definitions(fifofill_tests PRIVATE FIFOFILL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+  target_link_libraries(fifofill_tests PRIVATE fifofill_tools GTest::gtest_main)
   target_compile_options(fifofill_tests PRIVATE
     $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
   include(GoogleTest)
   gtest_discover_tests(fifofill_tests)
+  add_test(NAME replay_fixture COMMAND fifofill_replay --engine reference
+    --input ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sweep.ff)
+  add_test(NAME workload_export COMMAND fifofill_replay --seed 42 --commands 1000
+    --scenario mixed --output ${CMAKE_CURRENT_BINARY_DIR}/replay-smoke.ff)
+  set_tests_properties(workload_export PROPERTIES FIXTURES_SETUP exported_trace)
+  add_test(NAME replay_export COMMAND fifofill_replay --engine reference
+    --input ${CMAKE_CURRENT_BINARY_DIR}/replay-smoke.ff)
+  set_tests_properties(replay_export PROPERTIES FIXTURES_REQUIRED exported_trace)
 endif()
